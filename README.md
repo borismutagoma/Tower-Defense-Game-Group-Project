@@ -11,6 +11,152 @@
 
 [Le sujet 2026](https://www.fil.univ-lille.fr/~varre/portail/l2s4-projet/sujet2026.pdf)
 
+# 🎮 Jouer en ligne
+
+👉 **[Lancer le jeu dans le navigateur](https://borismutagoma.github.io/Tower-Defense-Game-Group-Project/web/)**
+
+Code source : [github.com/borismutagoma/Tower-Defense-Game-Group-Project](https://github.com/borismutagoma/Tower-Defense-Game-Group-Project)
+
+![Aperçu de l'interface web](web/preview.png)
+
+> **À savoir :** GitHub Pages n'héberge que des fichiers statiques (HTML, CSS, JavaScript) et ne peut donc pas exécuter notre serveur Java.
+> Sur la version en ligne, la page le détecte et lance une **démo hors-ligne** (`web/sim.js`) qui reproduit les règles du jeu en JavaScript (badge *« Offline demo »* en bas de l'écran).
+> Pour jouer avec le **vrai moteur Java**, lancez le serveur en local (voir ci-dessous) : le badge affiche alors *« Java server »*.
+
+### Lancer la version web avec le moteur Java (en local)
+
+Depuis la racine du projet :
+
+```bash
+make classes                                        # compile les sources dans classes/
+java -cp classes towerdefense.web.WebGameServer     # démarre le serveur sur le port 8080
+```
+
+Puis ouvrir **http://localhost:8080** dans un navigateur. (Un autre port peut être passé en argument : `java -cp classes towerdefense.web.WebGameServer 9000`.)
+
+> Le serveur doit être lancé depuis la racine du projet, car il sert les fichiers du dossier `web/`.
+
+### Commandes en jeu
+
+| Action | Souris / bouton | Clavier |
+|---|---|---|
+| Choisir une tour | Cliquer sur une tuile de la boutique | `1` à `7` |
+| Poser la tour | Cliquer sur l'herbe (Maj + clic pour en poser plusieurs) | — |
+| Voir la portée / vendre une tour | Cliquer sur une tour posée, puis *« Sell »* | `Suppr` |
+| Lancer une manche / accélérer | Gros bouton bleu | `R` / `F` |
+| Pause / reprise | *Pause* | `P` |
+| Avancer d'un seul tick | *Step* | `Espace` |
+| Enchaîner les manches automatiquement | Interrupteur *Auto rounds* | `A` |
+| Annuler | Clic droit | `Échap` |
+
+---
+
+# 🧩 Conception du jeu
+
+Le projet a été conçu en deux couches bien séparées :
+
+1. **Le moteur de jeu en Java** (`src/towerdefense/`), construit livrable après livrable, qui contient **toutes les règles** ;
+2. **L'interface web** (`web/` + `src/towerdefense/web/WebGameServer.java`), ajoutée à la fin, qui ne fait qu'**afficher** l'état du moteur et lui transmettre les actions du joueur.
+
+Cette séparation permet de modifier l'apparence du jeu sans jamais toucher à la logique, et inversement.
+
+## 1. Le moteur Java
+
+### Le plateau et le chemin
+
+- Le plateau (`Board`, classe abstraite) est une **grille à deux dimensions** de `Cell` (`Cell[][]`). Chaque cellule connaît sa `Position` et sait si elle fait partie du chemin.
+- Les sous-classes de `Board` correspondent aux modes de jeu : `ClassicalBoard` (un seul chemin), `RandomBoard` (plusieurs chemins) et `DebugBoard` (chemin fixe pour les tests).
+- La génération du chemin a été sortie des plateaux et placée dans le paquetage `path.generators` (`GeneratePath`, `GenerateOnePath`, `GenerateMultiplePath`…). Le chemin part de la colonne de gauche et avance vers la droite, en favorisant les déplacements vers la droite (la cellule de droite est ajoutée deux fois dans le tirage) et sans jamais repasser sur une cellule déjà utilisée. Si la génération échoue ou si le chemin est trop court, on recommence (jusqu'à 1000 tentatives).
+
+### Les ballons
+
+- `Balloon` est une **classe abstraite** : chaque sous-classe définit seulement sa vie et sa vitesse par défaut. Les noms évoquent le ciel et les nuages :
+
+| Ballon | Vie | Vitesse | Particularité |
+|---|---|---|---|
+| `CumulusBalloon` | 1.0 | 1.0 | ballon de base |
+| `ZephyrBalloon` | 0.8 | 1.5 | rapide mais fragile |
+| `StratusBalloon` | 2.0 | 0.5 | lent mais résistant |
+
+- Un ballon suit son `Path` cellule par cellule : à chaque tick, il accumule sa vitesse et avance d'une cellule chaque fois que le cumul dépasse 1. Sa **position exacte** est interpolée entre deux cellules, ce qui permet un calcul de portée précis (et une animation fluide côté web).
+- Les **effets** (`Effect.SLOWED` : vitesse × 0,5 pendant 10 ticks, `Effect.FREEZE` : immobilisé pendant 10 ticks) modifient la vitesse renvoyée par `getSpeed()`.
+- La génération des vagues est confiée aux générateurs (`BalloonGenerator`, `EvolvingBalloonGenerator`…). L'`EvolvingBalloonGenerator` débloque de nouveaux types de ballons au fil des niveaux et retire les plus faibles tous les 3 niveaux.
+
+### Les tours : trois piliers indépendants
+
+Pour maximiser la modularité, une attaque est découpée en trois responsabilités :
+
+1. **La tour** (`towers`) : possède la position, la portée, la cadence et le coût. Elle sait vérifier seule si un ballon est à portée (`isInRange`). La portée est relative à la taille du plateau : une portée de 100 couvre environ 15 % de la plus grande dimension de la grille ; une portée de `-1` signifie « tout le plateau » (Sniper).
+2. **La stratégie** (`strategy`) : choisit *quelle* cible viser. C'est le **patron de conception Stratégie** ; par exemple `FirstOutStrategy` vise le ballon le plus avancé sur le chemin. On peut donner une « personnalité » différente à chaque tour sans modifier la tour elle-même.
+3. **Le projectile** (`projectiles`) : porte les dégâts et la façon d'impacter (une `BombProjectile` touche une zone grâce à `DamageZoneProjectile`). Les projectiles peuvent évoluer indépendamment de la tour qui les lance.
+
+Deux familles de tours en découlent :
+
+| Tour | Coût | Portée | Cadence (ticks) | Effet |
+|---|---|---|---|---|
+| Monkey Dart | 200 | 100 | 2 | fléchette (1 dégât) |
+| Needle | 300 | 80 | 1 | aiguille (1 dégât) |
+| Gorilla | 300 | 200 | 4 | fléchette aiguisée (2 dégâts) |
+| Sniper Monkey | 500 | ∞ | 5 | fléchette très aiguisée (4 dégâts) |
+| Bomb | 600 | 150 | 5 | bombe, dégâts de zone (2 dégâts) |
+| Slow | 400 | 100 | 3 | ralentit les ballons |
+| Freeze | 500 | 100 | 6 | gèle les ballons |
+
+- Les tours à projectiles héritent de `BaseProjectileTower` / `BaseUpgradeableProjectileTower`, qui mutualisent le code ; les tours à effet (`SlowTower`, `FreezeTower`) s'appuient sur `EffectTowerLogic`.
+- Les **améliorations** passent par l'interface `Upgradeable` (une interface plutôt qu'une classe, pour éviter le double héritage impossible en Java) et par les sous-classes de `StatModifier` (`PowerStatModifier`, `RangeStatModifier`, `CadenceStatModifier`, `ProjectileStatModifier`).
+- La création des tours est confiée au `TowerGenerator`, qui déclare une « recette » de fabrication par type de tour (`initRecipes`), plutôt que de multiplier les `new` dans le code du jeu.
+- Toutes les constantes d'équilibrage (coûts, portées, dégâts, vies…) sont centralisées dans `GameConstants`, ce qui permet d'ajuster le jeu à un seul endroit.
+
+### Le joueur, les actions et les filtres
+
+- `Player` gère la vie (20 au départ) et l'argent (800 au départ). Un ballon éclaté rapporte `vie du ballon × 20` ; un ballon qui atteint la fin du chemin retire des vies.
+- Toute modification du plateau passe par une **action** (`BuyTowerAction`, `SellTowerAction`, `BuyUpgradeAction`, `SellUpgradeAction`, `DisplayBoardAction`), orchestrées par l'`InteractionManager`.
+- Les **filtres** (`AffordableTowerFilter`, `StillUpgreadableTowerFilter`…) ne proposent au joueur que les choix possibles (tours qu'il peut payer, tours encore améliorables…).
+- Le `TowerManager` centralise la gestion des tours (achat, vente, amélioration) au lieu de laisser `Player` ou le jeu les manipuler directement.
+- La saisie est abstraite par un `ListChooser` : `InteractiveListChooser` pour un humain, `RandomListChooser` pour la simulation aléatoire. Le même code d'actions sert donc aux deux modes de jeu (`InteractiveGame` et `RandomGame`).
+
+### Déroulement d'un tick
+
+À chaque tick, le moteur exécute toujours le même ordre :
+
+1. chaque tour agit (`act`) : elle vérifie sa cadence, demande une cible à sa stratégie et applique son projectile ou son effet ;
+2. chaque ballon se met à jour (`update`) : effets, déplacement, nouvelle position ;
+3. les ballons éclatés rapportent de l'argent, ceux arrivés au bout retirent des vies, puis ils sont retirés du plateau ;
+4. la manche se termine quand il ne reste plus aucun ballon. Toutes les 3 manches, le niveau de jeu augmente.
+
+## 2. L'interface web
+
+### Le serveur : `WebGameServer`
+
+Pour ne rien changer au moteur, nous avons ajouté une petite couche serveur basée sur `com.sun.net.httpserver` (inclus dans le JDK, **aucune dépendance externe**). Il crée une partie (`ClassicalBoard` 12 × 18) et expose une **API REST** qui renvoie l'état complet du jeu en JSON :
+
+| Méthode | Route | Rôle |
+|---|---|---|
+| `GET` | `/api/state` | état complet (joueur, grille, chemin, tours, ballons, boutique) |
+| `POST` | `/api/round` | lance la manche suivante |
+| `POST` | `/api/tick` | avance d'un tick |
+| `POST` | `/api/tower` | pose une tour (`{"type":"monkey","row":3,"col":5}`) |
+| `POST` | `/api/sell` | vend une tour (`{"row":3,"col":5}`) |
+| `POST` | `/api/reset` | nouvelle partie |
+
+Le serveur sert aussi les fichiers du dossier `web/` : une seule commande suffit pour jouer.
+
+### Le client : `web/`
+
+Le front-end est écrit en **HTML / CSS / JavaScript sans framework ni étape de compilation** :
+
+- `index.html` : la structure de la page (carte, barre latérale en bois avec la boutique, barre du bas) ;
+- `style.css` : le thème « bois et herbe » inspiré des jeux de type *tower defense* (polices Google *Luckiest Guy* et *Fredoka*) ;
+- `render.js` : **tout le dessin**, avec l'API Canvas 2D. Herbe, fleurs, buissons, chemin pavé (pavés générés par un diagramme de Voronoï), tours, ballons et effets sont dessinés par le code : **aucune image n'est nécessaire**. Le dessin se fait en « unités de cellule », donc la carte s'adapte à n'importe quelle taille d'écran ;
+- `game.js` : le contrôleur. Il envoie les actions du joueur à l'API, reçoit le nouvel état et l'anime :
+  - les ballons glissent de façon fluide d'un tick à l'autre (interpolation le long du chemin) ;
+  - en comparant deux états successifs, il déduit quels ballons ont éclaté ou se sont échappés et affiche fléchettes, explosions, « +20 » et pertes de vies. Ces animations sont **purement visuelles** : le serveur reste seul juge des règles ;
+- `sim.js` : la démo hors-ligne utilisée automatiquement quand le serveur Java est introuvable (cas de GitHub Pages).
+
+Au démarrage, la page essaie de joindre l'API sur la même adresse, puis sur `http://localhost:8080`, et sinon bascule sur la démo hors-ligne.
+
+---
+
 # Livrables
 
 Les paragraphes concernant les livrables doivent être remplis avant la date de rendu du livrable. A chaque fois on décrira l'état du projet par rapport aux objectifs du livrable. Il est attendu un texte de plusieurs lignes qui explique la modélisation choisie, et/ou les algorithmes choisis et/ou les modifications apportées à la modélisation du livrable précédent.
@@ -27,6 +173,8 @@ Un lien vers une image de l'UML doit être fourni (une photo d'un diagramme UML 
 
 ### Menu Rapide
 
+- [Jouer en ligne](#-jouer-en-ligne)
+- [Conception du jeu](#-conception-du-jeu)
 - [Livrable 1](#livrable-1)
 - [Livrable 2](#livrable-2)
 - [Livrable 3](#livrable-3)
