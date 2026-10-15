@@ -153,7 +153,7 @@ Le front-end est écrit en **HTML / CSS / JavaScript sans framework ni étape de
   - en comparant deux états successifs, il déduit quels ballons ont éclaté ou se sont échappés et affiche fléchettes, explosions, « +20 » et pertes de vies. Ces animations sont **purement visuelles** : le serveur reste seul juge des règles ;
 - `sim.js` : la démo hors-ligne utilisée automatiquement quand le serveur Java est introuvable (cas de GitHub Pages).
 
-Au démarrage, la page essaie de joindre l'API sur la même adresse, puis sur `http://localhost:8080`, et sinon bascule sur la démo hors-ligne.
+Au démarrage, si la page est ouverte en local (`localhost`, `127.0.0.1` ou fichier), elle essaie de joindre l'API sur la même adresse, puis sur `http://localhost:8080`, et sinon bascule sur la démo hors-ligne. Sur un hébergement public comme GitHub Pages, elle passe directement à la démo hors-ligne : sonder `localhost` depuis un site public déclencherait la demande d'autorisation *« accès au réseau local »* du navigateur. Le paramètre `?server=<adresse>` permet de forcer la connexion à un serveur précis.
 
 ---
 

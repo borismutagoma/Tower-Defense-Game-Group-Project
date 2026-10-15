@@ -98,9 +98,20 @@
     }
 
     async function connect() {
+        // Only look for the Java server when the page is opened from this computer
+        // (localhost or a local file). On a public host such as GitHub Pages, probing
+        // localhost makes Chrome ask for "access to other apps and services on this
+        // device", so we go straight to the offline demo there.
+        // A server can still be forced with ?server=http://localhost:8080
         const bases = [];
-        if (location.protocol.startsWith('http')) bases.push(location.origin + '/api');
-        bases.push('http://localhost:8080/api');
+        const forced = new URLSearchParams(location.search).get('server');
+        const host = location.hostname;
+        const isLocal = location.protocol === 'file:' || host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '';
+        if (forced) bases.push(forced.replace(/\/+$/, '') + '/api');
+        if (isLocal) {
+            if (location.protocol.startsWith('http')) bases.push(location.origin + '/api');
+            bases.push('http://localhost:8080/api');
+        }
         for (const base of [...new Set(bases)]) {
             try {
                 const { data } = await fetchJson(base + '/state', {}, 2500);
